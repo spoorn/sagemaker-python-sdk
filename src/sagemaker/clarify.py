@@ -63,6 +63,13 @@ ANALYSIS_CONFIG_SCHEMA_V1_0 = Schema(
         SchemaOptional("features"): str,
         SchemaOptional("label_values_or_threshold"): [Or(int, float, str)],
         SchemaOptional("probability_threshold"): float,
+        SchemaOptional("segment_config"): [
+            {
+                SchemaOptional("config_name"): str,
+                "name_or_index": Or(str, int),
+                "segments": [[Or(str, int)]],
+            }
+        ],
         SchemaOptional("facet"): [
             {
                 "name_or_index": Or(str, int),
@@ -304,6 +311,59 @@ ANALYSIS_CONFIG_SCHEMA_V1_0 = Schema(
 )
 
 
+class SegmentationConfig:
+    """Config object that defines segment of the dataset on which bias and explainability metrics
+    must be computed. SegmentationConfig can only be defined on numerical or categorical columns.
+    """
+
+    def __init__(
+        self,
+        name_or_index: Union[str, int],
+        segments: [[str, int]],
+        config_name: Optional[str] = None,
+    ):
+        """Initializes SegmentationConfig object
+
+        Args:
+            name_or_index (str or int): The name or index of the column in the dataset on which
+            this segment is defined
+            segments (List[List[str or int]]): Each List of values represents one segment. If N
+                Lists are provided, we generate N+1 segments - the additional segment, denoted as
+                the '__default__' segment, is for the rest of the values that are not covered by
+                these lists.
+
+                The values in internal list must be intervals for continuous columns (eg.: "[1, 4]"
+                or "(2, 5]"), or one of the categorical values for categorical columns.
+                Eg,: For a continuous column, `segments` could be
+                [["[1, 4]", "(5, 6]"], ["(7, 9)"]] - this generates 3 segments. For a categorical
+                columns with values ("A", "B", "C", "D"), `segments` could be [["A", "B"]].
+                This generate 2 segments.
+            config_name (str) - Optional name for the segment config to identiy the config.
+        """
+        if name_or_index is None:
+            raise ValueError("`name_or_index` cannot be None")
+        self.name_or_index = name_or_index
+        if (
+            not segments
+            or not isinstance(segments, list)
+            or not all([isinstance(segment, list) for segment in segments])
+        ):
+            raise ValueError("`segments` must be a list of list of values or intervals. ")
+        self.segments = segments
+        self.config_name = config_name
+
+    def to_dict(self) -> Dict[str, Any]:  # pragma: no cover
+        """Returns SegmentationConfig as a dict."""
+        segment_config_dict = {"name_or_index": self.name_or_index, "segments": self.segments}
+        if self.config_name:
+            segment_config_dict["config_name"] = self.config_name
+        return segment_config_dict
+
+    def __str__(self) -> str:
+        """Returns SegmentationConfig as a JSON serialized string."""
+        return json.dumps(self.to_dict())
+
+
 class DataConfig:
     """Config object related to configurations of the input and output dataset."""
 
@@ -324,6 +384,7 @@ class DataConfig:
         predicted_label_headers: Optional[List[str]] = None,
         predicted_label: Optional[Union[str, int]] = None,
         excluded_columns: Optional[Union[List[int], List[str]]] = None,
+        segmentation_config: List[SegmentationConfig] = None,
     ):
         """Initializes a configuration of both input and output datasets.
 
@@ -390,6 +451,7 @@ class DataConfig:
                 Only a single predicted label per sample is supported at this time.
             excluded_columns (list[int] or list[str]): A list of names or indices of the columns
                 which are to be excluded from making model inference API calls.
+            segmentation_config (list[SegmentationConfig]): A list of SegmentationConfig objects
 
         Raises:
             ValueError: when the ``dataset_type`` is invalid, predicted label dataset parameters
@@ -457,6 +519,7 @@ class DataConfig:
         self.predicted_label_headers = predicted_label_headers
         self.predicted_label = predicted_label
         self.excluded_columns = excluded_columns
+        self.segmentation_configs = segmentation_config
         self.analysis_config = {
             "dataset_type": dataset_type,
         }
@@ -474,6 +537,12 @@ class DataConfig:
         _set(predicted_label_headers, "predicted_label_headers", self.analysis_config)
         _set(predicted_label, "predicted_label", self.analysis_config)
         _set(excluded_columns, "excluded_columns", self.analysis_config)
+        if segmentation_config:
+            _set(
+                [item.to_dict() for item in segmentation_config],
+                "segment_config",
+                self.analysis_config,
+            )
 
     def get_config(self):
         """Returns part of an analysis config dictionary."""
